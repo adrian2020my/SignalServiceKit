@@ -55,16 +55,16 @@ parameters:params \
 location:__PRETTY_FUNCTION__];
 
 #define OWSAnalyticsDebug(frmt, ...) OWSAnalyticsLogEvent(OWSAnalyticsSeverityDebug, frmt, ##__VA_ARGS__)
-#define OWSAnalyticsDebugWithParameters(description, params) OWSAnalyticsLogEvent(OWSAnalyticsSeverityDebug, description, params)
+#define OWSAnalyticsDebugWithParameters(description, params) OWSAnalyticsLogEventWithParameters(OWSAnalyticsSeverityDebug, description, params)
 
 #define OWSAnalyticsInfo(frmt, ...) OWSAnalyticsLogEvent(OWSAnalyticsSeverityInfo, frmt, ##__VA_ARGS__)
-#define OWSAnalyticsInfoWithParameters(description, params) OWSAnalyticsLogEvent(OWSAnalyticsSeverityInfo, description, params)
+#define OWSAnalyticsInfoWithParameters(description, params) OWSAnalyticsLogEventWithParameters(OWSAnalyticsSeverityInfo, description, params)
 
 #define OWSAnalyticsWarn(frmt, ...) OWSAnalyticsLogEvent(OWSAnalyticsSeverityWarn, frmt, ##__VA_ARGS__)
-#define OWSAnalyticsWarnWithParameters(description, params) OWSAnalyticsLogEvent(OWSAnalyticsSeverityWarn, description, params)
+#define OWSAnalyticsWarnWithParameters(description, params) OWSAnalyticsLogEventWithParameters(OWSAnalyticsSeverityWarn, description, params)
 
 #define OWSAnalyticsError(frmt, ...) OWSAnalyticsLogEvent(OWSAnalyticsSeverityError, frmt, ##__VA_ARGS__)
-#define OWSAnalyticsErrorWithParameters(description, params) OWSAnalyticsLogEvent(OWSAnalyticsSeverityError, description, params)
+#define OWSAnalyticsErrorWithParameters(description, params) OWSAnalyticsLogEventWithParameters(OWSAnalyticsSeverityError, description, params)
 
 #define OWSAnalyticsCritical(frmt, ...) OWSAnalyticsLogEvent(OWSAnalyticsSeverityCritical, frmt, ##__VA_ARGS__)
-#define OWSAnalyticsCriticalWithParameters(description, params) OWSAnalyticsLogEvent(OWSAnalyticsSeverityCritical, description, params)
+#define OWSAnalyticsCriticalWithParameters(description, params) OWSAnalyticsLogEventWithParameters(OWSAnalyticsSeverityCritical, description, params)
