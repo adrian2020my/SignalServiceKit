@@ -26,8 +26,6 @@ NSString *const TSStorageManagerExceptionNameDatabasePasswordInaccessible = @"TS
 NSString *const TSStorageManagerExceptionNameDatabasePasswordUnwritable = @"TSStorageManagerExceptionNameDatabasePasswordUnwritable";
 NSString *const TSStorageManagerExceptionNameNoDatabase = @"TSStorageManagerExceptionNameNoDatabase";
 
-NSString *const TSStorageManagerHasDatabasePassword = @"TSStorageManagerHasDatabasePassword";
-
 static const NSString *const databaseName = @"Signal.sqlite";
 static NSString *keychainService          = @"TSKeyChainService";
 static NSString *keychainDBPassAccount    = @"TSDatabasePass";
@@ -112,7 +110,7 @@ static NSString *keychainDBPassAccount    = @"TSDatabasePass";
     self = [super init];
     
     if (![self tryToLoadDatabase]) {
-        // Failing to load the database is a catastrophic.
+        // Failing to load the database is catastrophic.
         //
         // The best we can try to do is to discard the current database
         // and behave like a clean install.
@@ -120,8 +118,7 @@ static NSString *keychainDBPassAccount    = @"TSDatabasePass";
         OWSAnalyticsCritical(@"Could not load database");
     
         // Try to reset app by deleting database.
-        [self deletePasswordFromKeychain];
-        [self deleteDatabaseFile];
+        [self resetSignalStorage];
 
         if (![self tryToLoadDatabase]) {
             OWSAnalyticsCritical(@"Could not load database (second attempt)");
@@ -305,7 +302,7 @@ static NSString *keychainDBPassAccount    = @"TSDatabasePass";
         // or the keychain has become corrupt.  Either way, we want to get back to a
         // "known good state" and behave like a new install.
         
-        BOOL shouldHavePassword = [[NSUserDefaults standardUserDefaults] objectForKey:TSStorageManagerHasDatabasePassword];
+        BOOL shouldHavePassword = [NSFileManager.defaultManager fileExistsAtPath:[self dbPath]];
         if (shouldHavePassword) {
             OWSAnalyticsCriticalWithParameters(@"Could not retrieve database password from keychain",
                                             @{
@@ -313,8 +310,8 @@ static NSString *keychainDBPassAccount    = @"TSDatabasePass";
                                               });
         }
         
-        [self deletePasswordFromKeychain];
-        [self deleteDatabaseFile];
+        // Try to reset app by deleting database.
+        [self resetSignalStorage];
 
         dbPassword = [self createAndSetNewDatabasePassword];
     }
@@ -338,10 +335,7 @@ static NSString *keychainDBPassAccount    = @"TSDatabasePass";
         [NSException raise:TSStorageManagerExceptionNameDatabasePasswordUnwritable
                     format:@"Setting DB password failed with error: %@", keySetError];
     } else {
-        DDLogError(@"Succesfully set new DB password. First launch?");
-        [[NSUserDefaults standardUserDefaults] setObject:@(YES)
-                                                  forKey:TSStorageManagerHasDatabasePassword];
-        [[NSUserDefaults standardUserDefaults] synchronize];
+        DDLogError(@"Succesfully set new DB password.");
     }
 
     return newDBPassword;
@@ -444,8 +438,6 @@ static NSString *keychainDBPassAccount    = @"TSDatabasePass";
 
 - (void)deletePasswordFromKeychain {
     [SAMKeychain deletePasswordForService:keychainService account:keychainDBPassAccount];
-    [[NSUserDefaults standardUserDefaults] removeObjectForKey:TSStorageManagerHasDatabasePassword];
-    [[NSUserDefaults standardUserDefaults] synchronize];
 }
 
 - (void)deleteDatabaseFile {
@@ -456,16 +448,15 @@ static NSString *keychainDBPassAccount    = @"TSDatabasePass";
     }
 }
 
-- (void)wipeSignalStorage {
+- (void)resetSignalStorage {
     self.database = nil;
+    _dbConnection = nil;
     
     [self deletePasswordFromKeychain];
     
     [self deleteDatabaseFile];
     
     [TSAttachmentStream deleteAttachments];
-    
-    [[self init] setupDatabase];
 }
 
 #pragma mark - Logging
