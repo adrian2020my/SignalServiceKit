@@ -40,13 +40,10 @@ def process(filepath):
     text = text.strip()
 
     header = '''//
-//  %s
-//
 //  Copyright (c) %s Open Whisper Systems. All rights reserved.
 //
 
 ''' % ( 
-    os.path.basename(filepath),
     datetime.datetime.now().year,
     )
     text = header + text + '\n'
@@ -75,7 +72,7 @@ def should_ignore_path(path):
             return True
         if component.endswith('.framework'):
             return True
-        if component in ('Pods', 'ThirdParty',):
+        if component in ('Pods', 'ThirdParty', 'Carthage',):
             return True                
         
     return False
@@ -86,7 +83,7 @@ def process_if_appropriate(filepath):
     if filename.startswith('.'):
         return
     file_ext = os.path.splitext(filename)[1]
-    if file_ext not in ('.h', '.hpp', '.cpp', '.m', '.mm', '.pch'):
+    if file_ext not in ('.h', '.hpp', '.cpp', '.m', '.mm', '.pch', '.swift'):
         return
     if should_ignore_path(filepath):
         return
