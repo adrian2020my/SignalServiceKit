@@ -69,11 +69,6 @@
     } else {
         LOG_MAYBE(async, LOG_LEVEL_DEF, logFlag, 0, nil, location, @"%@ %@", description, parameters);
     }
-
-    NSMutableDictionary *serviceParameters = (parameters
-                                              ? [parameters mutableCopy]
-                                              : [NSMutableDictionary new]);
-    serviceParameters[
     
     // Do nothing.  We don't yet serialize or transmit analytics events.
 }
