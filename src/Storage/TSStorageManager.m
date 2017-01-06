@@ -1,5 +1,8 @@
-//  Created by Frederic Jacobs on 27/10/14.
-//  Copyright (c) 2014 Open Whisper Systems. All rights reserved.
+//
+//  TSStorageManager.m
+//
+//  Copyright (c) 2017 Open Whisper Systems. All rights reserved.
+//
 
 #import "TSStorageManager.h"
 #import "NSData+Base64.h"
@@ -15,12 +18,15 @@
 #import <25519/Randomness.h>
 #import <SAMKeychain/SAMKeychain.h>
 #import <YapDatabase/YapDatabaseRelationship.h>
+#import "OWSAnalytics.h"
 
 NSString *const TSUIDatabaseConnectionDidUpdateNotification = @"TSUIDatabaseConnectionDidUpdateNotification";
 
 NSString *const TSStorageManagerExceptionNameDatabasePasswordInaccessible = @"TSStorageManagerExceptionNameDatabasePasswordInaccessible";
 NSString *const TSStorageManagerExceptionNameDatabasePasswordUnwritable = @"TSStorageManagerExceptionNameDatabasePasswordUnwritable";
 NSString *const TSStorageManagerExceptionNameNoDatabase = @"TSStorageManagerExceptionNameNoDatabase";
+
+NSString *const TSStorageManagerHasDatabasePassword = @"TSStorageManagerHasDatabasePassword";
 
 static const NSString *const databaseName = @"Signal.sqlite";
 static NSString *keychainService          = @"TSKeyChainService";
@@ -32,18 +38,24 @@ static NSString *keychainDBPassAccount    = @"TSDatabasePass";
 
 @end
 
+#pragma mark -
+
 // Some lingering TSRecipient records in the wild causing crashes.
 // This is a stop gap until a proper cleanup happens.
 @interface TSRecipient : NSObject <NSCoding>
 
 @end
 
+#pragma mark -
+
 @interface OWSUnknownObject : NSObject <NSCoding>
 
 @end
 
+#pragma mark -
+
 /**
- * A default object to returned when we can't deserialize an object from YapDB. This can prevent crashes when
+ * A default object to return when we can't deserialize an object from YapDB. This can prevent crashes when
  * old objects linger after their definition file is removed. The danger is that, the objects can lay in wait
  * until the next time a DB extension is added and we necessarily enumerate the entire DB.
  */
@@ -61,9 +73,13 @@ static NSString *keychainDBPassAccount    = @"TSDatabasePass";
 
 @end
 
+#pragma mark -
+
 @interface OWSUnarchiverDelegate : NSObject <NSKeyedUnarchiverDelegate>
 
 @end
+
+#pragma mark -
 
 @implementation OWSUnarchiverDelegate
 
@@ -74,6 +90,8 @@ static NSString *keychainDBPassAccount    = @"TSDatabasePass";
 }
 
 @end
+
+#pragma mark -
 
 @implementation TSStorageManager
 
@@ -92,24 +110,52 @@ static NSString *keychainDBPassAccount    = @"TSDatabasePass";
 - (instancetype)initDefault
 {
     self = [super init];
+    
+    if (![self tryToLoadDatabase]) {
+        // Failing to load the database is a catastrophic.
+        //
+        // The best we can try to do is to discard the current database
+        // and behave like a clean install.
+        
+        OWSAnalyticsCritical(@"Could not load database");
+    
+        // Try to reset app by deleting database.
+        [self deletePasswordFromKeychain];
+        [self deleteDatabaseFile];
 
+        if (![self tryToLoadDatabase]) {
+            OWSAnalyticsCritical(@"Could not load database (second attempt)");
+
+            [NSException raise:TSStorageManagerExceptionNameNoDatabase format:@"Failed to initialize database."];
+        }
+    }
+    
+    return self;
+}
+
+- (BOOL)tryToLoadDatabase {
+    
+    // We determine the database password first, since a side effect of
+    // this can be deleting any existing database file (if we're recovering
+    // from a corrupt keychain).
+    NSData *databasePassword = [self databasePassword];
+    
     YapDatabaseOptions *options = [[YapDatabaseOptions alloc] init];
     options.corruptAction       = YapDatabaseCorruptAction_Fail;
     options.cipherKeyBlock      = ^{
-      return [self databasePassword];
+        return databasePassword;
     };
-
+    
     _database = [[YapDatabase alloc] initWithPath:[self dbPath]
                                        serializer:NULL
                                      deserializer:[[self class] logOnFailureDeserializer]
                                           options:options];
     if (!_database) {
-        DDLogError(@"%@ Failed to initialize database.", self.tag);
-        [NSException raise:TSStorageManagerExceptionNameNoDatabase format:@"Failed to initialize database."];
+        return NO;
     }
     _dbConnection = self.newDatabaseConnection;
-
-    return self;
+    
+    return YES;
 }
 
 /**
@@ -230,7 +276,9 @@ static NSString *keychainDBPassAccount    = @"TSDatabasePass";
 {
     [SAMKeychain setAccessibilityType:kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly];
     NSError *error;
-    NSString *dbPassword = [SAMKeychain passwordForService:keychainService account:keychainDBPassAccount error:&error];
+    NSString *dbPassword = [SAMKeychain passwordForService:keychainService
+                                                   account:keychainDBPassAccount
+                                                     error:&error];
 
     if (dbPassword && !error) {
         return YES;
@@ -248,42 +296,58 @@ static NSString *keychainDBPassAccount    = @"TSDatabasePass";
     [SAMKeychain setAccessibilityType:kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly];
 
     NSError *keyFetchError;
-    NSString *dbPassword =
-        [SAMKeychain passwordForService:keychainService account:keychainDBPassAccount error:&keyFetchError];
+    NSString *dbPassword = [SAMKeychain passwordForService:keychainService
+                                                   account:keychainDBPassAccount
+                                                     error:&keyFetchError];
 
     if (keyFetchError) {
-        switch (keyFetchError.code) {
-            case errSecItemNotFound:
-                dbPassword = [self createAndSetNewDatabasePassword];
-                break;
-            default:
-                DDLogError(@"%@ Getting DB password from keychain failed with error: %@", self.tag, keyFetchError);
-                [NSException raise:TSStorageManagerExceptionNameDatabasePasswordInaccessible
-                            format:@"Getting DB password from keychain failed with error: %@", keyFetchError];
-                break;
+        // Either this is a new install so there's no existing password to retrieve
+        // or the keychain has become corrupt.  Either way, we want to get back to a
+        // "known good state" and behave like a new install.
+        
+        BOOL shouldHavePassword = [[NSUserDefaults standardUserDefaults] objectForKey:TSStorageManagerHasDatabasePassword];
+        if (shouldHavePassword) {
+            OWSAnalyticsCriticalWithParameters(@"Could not retrieve database password from keychain",
+                                            @{
+                                              @"ErrorCode": @(keyFetchError.code)
+                                              });
         }
+        
+        [self deletePasswordFromKeychain];
+        [self deleteDatabaseFile];
+
+        dbPassword = [self createAndSetNewDatabasePassword];
     }
 
     return [dbPassword dataUsingEncoding:NSUTF8StringEncoding];
 }
 
+
 - (NSString *)createAndSetNewDatabasePassword
 {
     NSString *newDBPassword = [[Randomness generateRandomBytes:30] base64EncodedString];
     NSError *keySetError;
-    [SAMKeychain setPassword:newDBPassword forService:keychainService account:keychainDBPassAccount error:&keySetError];
+    [SAMKeychain setPassword:newDBPassword forService:keychainService
+                     account:keychainDBPassAccount
+                       error:&keySetError];
     if (keySetError) {
         DDLogError(@"%@ Setting DB password failed with error: %@", self.tag, keySetError);
+        
+        [self deletePasswordFromKeychain];
+        
         [NSException raise:TSStorageManagerExceptionNameDatabasePasswordUnwritable
                     format:@"Setting DB password failed with error: %@", keySetError];
     } else {
         DDLogError(@"Succesfully set new DB password. First launch?");
+        [[NSUserDefaults standardUserDefaults] setObject:@(YES)
+                                                  forKey:TSStorageManagerHasDatabasePassword];
+        [[NSUserDefaults standardUserDefaults] synchronize];
     }
 
     return newDBPassword;
 }
 
-#pragma mark convenience methods
+#pragma mark - convenience methods
 
 - (void)purgeCollection:(NSString *)collection {
     [self.dbConnection readWriteWithBlock:^(YapDatabaseReadWriteTransaction *transaction) {
@@ -378,20 +442,29 @@ static NSString *keychainDBPassAccount    = @"TSDatabasePass";
     [TSAttachmentStream deleteAttachments];
 }
 
-- (void)wipeSignalStorage {
-    self.database = nil;
-    NSError *error;
-
+- (void)deletePasswordFromKeychain {
     [SAMKeychain deletePasswordForService:keychainService account:keychainDBPassAccount];
+    [[NSUserDefaults standardUserDefaults] removeObjectForKey:TSStorageManagerHasDatabasePassword];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+}
+
+- (void)deleteDatabaseFile {
+    NSError *error;
     [[NSFileManager defaultManager] removeItemAtPath:[self dbPath] error:&error];
-
-
     if (error) {
         DDLogError(@"Failed to delete database: %@", error.description);
     }
+}
 
+- (void)wipeSignalStorage {
+    self.database = nil;
+    
+    [self deletePasswordFromKeychain];
+    
+    [self deleteDatabaseFile];
+    
     [TSAttachmentStream deleteAttachments];
-
+    
     [[self init] setupDatabase];
 }
 
